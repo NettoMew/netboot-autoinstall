@@ -38,7 +38,7 @@
     make -j{{ make_num_jobs }} \
          CROSS_COMPILE=aarch64-linux-gnu- \
          ARCH=arm64 \
-         EMBED={{ bootloader_filename }} \
+         EMBED={{ ipxe_embed }} \
          TRUST={{ trust_files }} \
          bin-arm64-efi/ipxe.efi \
          bin-arm64-efi/snp.efi \
@@ -54,7 +54,7 @@
          CROSS_COMPILE=aarch64-linux-gnu- \
          ARCH=arm64 \
          DEBUG={{ ipxe_debug_options }} \
-         EMBED={{ bootloader_filename }} \
+         EMBED={{ ipxe_embed }} \
          TRUST={{ trust_files }} \
          bin-arm64-efi/snp.efi
   args:

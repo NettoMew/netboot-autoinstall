@@ -1,0 +1,132 @@
+#!/bin/sh
+#
+# Debian 13 unattended install hooks, embedded in the {{ site_name }} bootloader.
+#
+# The installer runs "post.sh partman" right before partitioning and
+# "post.sh late" right before it reboots into the new system.
+#
+
+set -e
+
+# Prints the value of a cn_* parameter from the kernel command line.
+param() {
+	tr ' ' '\n' </proc/cmdline | sed -n "s/^cn_$1=//p" | tail -n 1
+}
+
+# Prints the first fixed, non-USB disk the installer can see.
+first_disk() {
+	for disk in $(list-devices disk); do
+		name=${disk##*/}
+		[ "$(cat "/sys/block/$name/removable")" = 0 ] || continue
+		[ "$(cat "/sys/block/$name/size")" -gt 0 ] || continue
+		case $(readlink -f "/sys/block/$name") in
+		*/usb*) continue ;;
+		esac
+		echo "$disk"
+		return
+	done
+}
+
+# Points partman and GRUB at the target disk and picks the partition recipe
+# that matches the firmware.
+select_disk() {
+	disk=$(param disk)
+	case $disk in
+	'' | auto) disk=$(first_disk) ;;
+	esac
+	if ! [ -b "$disk" ]; then
+		logger -t autoinstall "no usable target disk: '$disk'"
+		exit 1
+	fi
+
+	if [ -d /sys/firmware/efi ]; then
+		firmware=efi
+	else
+		firmware=bios
+	fi
+
+	debconf-set partman-auto/disk "$disk"
+	debconf-set grub-installer/bootdev "$disk"
+	debconf-set partman-auto/expert_recipe "$(debconf-get "partman-auto/expert_recipe_$firmware")"
+}
+
+# Lets the SSH keys in and keeps passwords out. systemd-tmpfiles has
+# usually created /root/.ssh already.
+authorize_keys() {
+	mkdir -p /target/root/.ssh
+	chmod 700 /target/root/.ssh
+	cat >/target/root/.ssh/authorized_keys <<'EOF'
+{{ cn_autoinstall_ssh_keys | join('\n') }}
+EOF
+	chmod 600 /target/root/.ssh/authorized_keys
+	echo 'PasswordAuthentication no' >/target/etc/ssh/sshd_config.d/autoinstall.conf
+}
+
+# Installs the NVIDIA data center stack from NVIDIA's own repository when
+# the machine carries NVIDIA GPUs: open kernel modules built by DKMS, the
+# CUDA user space and the persistence daemon, plus the fabric manager, which
+# only gets enabled on NVSwitch systems.
+install_nvidia() {
+	[ "$(param nvidia)" != off ] || return 0
+
+	gpus=0
+	nvswitches=0
+	for device in /sys/bus/pci/devices/*; do
+		[ "$(cat "$device/vendor")" = 0x10de ] || continue
+		case $(cat "$device/class") in
+		0x03*) gpus=$((gpus + 1)) ;;
+		0x0680*) nvswitches=$((nvswitches + 1)) ;;
+		esac
+	done
+	[ "$gpus" -gt 0 ] || return 0
+
+	arch=$(chroot /target dpkg --print-architecture)
+	case $arch in
+	amd64) repo=x86_64 ;;
+	arm64) repo=sbsa ;;
+	*) return 0 ;;
+	esac
+
+	cp /cuda-archive-keyring.gpg /target/usr/share/keyrings/
+	cat >/target/etc/apt/sources.list.d/nvidia-cuda.sources <<EOF
+Types: deb
+URIs: {{ cn_autoinstall_nvidia_repo }}/$repo/
+Suites: /
+Signed-By: /usr/share/keyrings/cuda-archive-keyring.gpg
+EOF
+	in-target apt-get update
+
+	branch={{ cn_autoinstall_nvidia_branch }}
+	if [ -z "$branch" ]; then
+		branch=$(chroot /target apt-cache pkgnames nvidia-driver-pinning- |
+			sed -n 's/^nvidia-driver-pinning-\([0-9]*\)$/\1/p' | sort -n | tail -n 1)
+	fi
+
+	# Headers come first so that DKMS finds them when the module package
+	# gets configured.
+	in-target apt-get install -y "linux-headers-$arch"
+	in-target apt-get install -y "nvidia-driver-pinning-$branch"
+	in-target apt-get install -y nvidia-driver-cuda nvidia-kernel-open-dkms \
+		nvidia-fabricmanager libnvidia-nscq
+
+	# The packages enable every service they ship. Persistence mode helps any
+	# GPU server, the fabric manager only runs on NVSwitch systems and
+	# nvidia-powerd drives Dynamic Boost, which exists on notebooks only.
+	in-target systemctl enable nvidia-persistenced.service
+	in-target systemctl disable nvidia-powerd.service
+	if [ "$nvswitches" -gt 0 ]; then
+		in-target systemctl enable nvidia-fabricmanager.service
+	else
+		in-target systemctl disable nvidia-fabricmanager.service
+	fi
+}
+
+case $1 in
+partman)
+	select_disk
+	;;
+late)
+	authorize_keys
+	install_nvidia
+	;;
+esac

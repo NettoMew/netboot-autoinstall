@@ -19,6 +19,13 @@
     src: "disks/{{ bootloader_filename }}.j2"
     dest: "{{ pipxe_source_dir }}/ipxe/src/{{ bootloader_filename }}"
 
+- name: Generate autoinstall files for embedding
+  ansible.builtin.include_tasks: generate_disks_autoinstall.yml
+  vars:
+    autoinstall_src_dir: "{{ pipxe_source_dir }}/ipxe/src"
+  when:
+    - cn_autoinstall_embedded | default(false) | bool
+
 - name: Copy netboot.xyz local EFI iPXE configs
   ansible.builtin.copy:
     src: "ipxe/local/{{ item }}"

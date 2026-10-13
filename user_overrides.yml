@@ -37,6 +37,12 @@ make_num_jobs: 1
 #  supergrub:
 #    enabled: false
 
+# embed the Debian 13 unattended installer into the bootloaders
+# root logs in with these keys only, see cn_autoinstall_* in the role defaults
+cn_autoinstall_enabled: true
+cn_autoinstall_ssh_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIvPTM+ZNvCyO2H/W61O3skeycHiByH1T5Zw8gc59A3c inkerbot@inkerbot-fxas
+
 early_menu_enabled: false
 early_menu_contents: |
    ### early menu overrides

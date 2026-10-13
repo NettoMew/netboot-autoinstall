@@ -62,6 +62,13 @@
     src: "disks/{{ bootloader_filename }}.j2"
     dest: "{{ ipxe_source_dir }}/src/{{ bootloader_filename }}"
 
+- name: Generate autoinstall files for embedding
+  ansible.builtin.include_tasks: generate_disks_autoinstall.yml
+  vars:
+    autoinstall_src_dir: "{{ ipxe_source_dir }}/src"
+  when:
+    - cn_autoinstall_embedded | default(false) | bool
+
 - name: Touch iPXE config local files
   ansible.builtin.file:
     path: "{{ ipxe_source_dir }}/{{ item }}"

@@ -28,7 +28,7 @@
   ansible.builtin.shell: |
     make clean
     make -j{{ make_num_jobs }} \
-         EMBED={{ bootloader_filename }} \
+         EMBED={{ ipxe_embed }} \
          TRUST={{ trust_files }} \
          bin-x86_64-linux/slirp.linux
   args:
@@ -39,7 +39,7 @@
   ansible.builtin.shell: |
     make clean
     make -j{{ make_num_jobs }} \
-         EMBED={{ bootloader_filename }} \
+         EMBED={{ ipxe_embed }} \
          DEBUG={{ ipxe_debug_options }} \
          TRUST={{ trust_files }} \
          bin-x86_64-linux/slirp.linux

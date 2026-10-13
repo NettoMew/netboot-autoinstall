@@ -1,0 +1,33 @@
+---
+
+- name: Require an SSH key for the autoinstall root account
+  ansible.builtin.assert:
+    that:
+      - cn_autoinstall_ssh_keys | length > 0
+    fail_msg: cn_autoinstall_ssh_keys needs at least one public key, the installed root account has no password
+
+- name: Create autoinstall directory in iPXE source directory
+  ansible.builtin.file:
+    path: "{{ autoinstall_src_dir }}/cn"
+    state: directory
+
+- name: Generate autoinstall preseed and hook script
+  ansible.builtin.template:
+    src: "cn/{{ item }}.j2"
+    dest: "{{ autoinstall_src_dir }}/cn/{{ item }}"
+  with_items:
+    - preseed.cfg
+    - post.sh
+
+- name: Retrieve CUDA repository keyring package
+  ansible.builtin.get_url:
+    url: "{{ cn_autoinstall_nvidia_keyring_url }}"
+    dest: "{{ autoinstall_src_dir }}/cn/cuda-keyring.deb"
+
+- name: Extract CUDA repository signing key
+  ansible.builtin.shell: |
+    dpkg-deb --fsys-tarfile cuda-keyring.deb |
+      tar -xO ./usr/share/keyrings/cuda-archive-keyring.gpg >cuda-archive-keyring.gpg
+  args:
+    chdir: "{{ autoinstall_src_dir }}/cn"
+    creates: "{{ autoinstall_src_dir }}/cn/cuda-archive-keyring.gpg"

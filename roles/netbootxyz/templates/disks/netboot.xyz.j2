@@ -20,6 +20,9 @@ set tftp-root-path /
 :start
 echo ${bold}${fg_gre}${site_name} - ${fg_whi}v${version}${boldoff}
 iseq ${site_name} netboot.xyz || echo ${bold}${fg_whi}Powered by ${fg_gre}netboot.xyz${fg_whi}${boldoff}
+{% if cn_autoinstall_embedded | bool %}
+isset ${cn_released} || goto cn_autoinstall
+{% endif %}
 prompt --key m --timeout 4000 Hit the ${bold}m${boldoff} key to open failsafe menu... && goto failsafe || goto dhcp
 
 :dhcp
@@ -153,3 +156,7 @@ goto start
 echo Type "exit" to return to menu
 shell
 goto failsafe
+{% if cn_autoinstall_embedded | bool %}
+
+{% include 'cn/autoinstall.ipxe.j2' %}
+{% endif %}

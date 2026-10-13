@@ -146,6 +146,37 @@ bootloaders:
 cert_dir: /etc/netbootxyz/certs
 cert_file_filename: ca-netboot-xyz.crt
 checksums_filename: '{{ site_name }}-sha256-checksums.txt'
+cn_autoinstall_dns: 223.5.5.5
+cn_autoinstall_embedded: '{{ cn_autoinstall_enabled | bool and bootloader_filename == "netboot.xyz" }}'
+cn_autoinstall_enabled: false
+cn_autoinstall_hostname: debian
+cn_autoinstall_mirrors:
+  - host: mirror.nju.edu.cn
+    name: Nanjing University
+  - host: mirrors.tuna.tsinghua.edu.cn
+    name: Tsinghua University
+  - host: mirrors.ustc.edu.cn
+    name: University of Science and Technology of China
+  - host: mirrors.aliyun.com
+    name: Alibaba Cloud
+  - host: mirrors.huaweicloud.com
+    name: Huawei Cloud
+cn_autoinstall_ntp: ntp.aliyun.com
+cn_autoinstall_nvidia_branch: ''
+cn_autoinstall_nvidia_keyring_url: https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb
+cn_autoinstall_nvidia_repo: http://developer.download.nvidia.cn/compute/cuda/repos/debian13
+cn_autoinstall_packages:
+  - ca-certificates
+  - curl
+  - fish
+  - gpg
+  - iotop
+  - mtr-tiny
+  - nload
+  - rsync
+  - tcpdump
+cn_autoinstall_ssh_keys: []
+cn_autoinstall_timezone: Asia/Shanghai
 codesign_cert_filename: codesign.crt
 codesign_key_filename: codesign.key
 custom_generate_menus: false
@@ -173,6 +204,8 @@ ipxe_ca_filename: ca-ipxe-org.crt
 ipxe_ca_url: http://ca.ipxe.org/ca.crt
 ipxe_debug_enabled: false
 ipxe_debug_options: httpcore,tls
+ipxe_embed: '{{ bootloader_filename }}{{ ",cn/preseed.cfg,cn/post.sh,cn/cuda-archive-keyring.gpg"
+  if cn_autoinstall_embedded | bool else "" }}'
 ipxe_repo: https://github.com/ipxe/ipxe
 ipxe_secureboot_archive_url: https://github.com/ipxe/ipxe/releases/download/{{ ipxe_secureboot_version
   }}/ipxeboot.tar.gz
