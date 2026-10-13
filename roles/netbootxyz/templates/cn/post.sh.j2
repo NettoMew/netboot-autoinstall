@@ -9,10 +9,7 @@
 
 set -e
 
-# Prints the value of a cn_* parameter from the kernel command line.
-param() {
-	tr ' ' '\n' </proc/cmdline | sed -n "s/^cn_$1=//p" | tail -n 1
-}
+{% include 'cn/common.sh.j2' %}
 
 # Prints the first fixed, non-USB disk the installer can see.
 first_disk() {
@@ -64,26 +61,6 @@ hide_password() {
 scrub_password() {
 	sed -i 's/cn_password=[0-9a-f]*/cn_password=/g' \
 		/target/var/log/installer/syslog /target/var/log/installer/hardware-summary
-}
-
-# Lets the SSH keys in. Without a root password SSH takes keys only, with
-# one root may log in with either. systemd-tmpfiles has usually created
-# /root/.ssh already.
-configure_login() {
-	mkdir -p /target/root/.ssh
-	chmod 700 /target/root/.ssh
-	cat >/target/root/.ssh/authorized_keys <<'EOF'
-{{ cn_autoinstall_ssh_keys | join('\n') }}
-EOF
-	chmod 600 /target/root/.ssh/authorized_keys
-
-	password=$(param password)
-	if [ -z "$password" ]; then
-		echo 'PasswordAuthentication no' >/target/etc/ssh/sshd_config.d/autoinstall.conf
-		return
-	fi
-	printf 'root:%b\n' "$(echo "$password" | sed 's/../\\x&/g')" | chroot /target chpasswd
-	echo 'PermitRootLogin yes' >/target/etc/ssh/sshd_config.d/autoinstall.conf
 }
 
 # Installs the NVIDIA data center stack from NVIDIA's own repository when

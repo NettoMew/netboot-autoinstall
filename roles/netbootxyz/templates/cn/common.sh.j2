@@ -1,0 +1,28 @@
+# Shared by post.sh (Debian) and the Ubuntu installer, which both mount the
+# new system at /target.
+
+# Prints the value of a cn_* parameter from the kernel command line.
+param() {
+	tr ' ' '\n' </proc/cmdline | sed -n "s/^cn_$1=//p" | tail -n 1
+}
+
+# Lets the SSH keys in. Without a root password SSH takes keys only, with
+# one root may log in with either. The file sorts ahead of the snippets
+# that cloud images ship, since sshd keeps the first value it reads.
+configure_login() {
+	mkdir -p /target/root/.ssh
+	chmod 700 /target/root/.ssh
+	cat >/target/root/.ssh/authorized_keys <<'EOF'
+{{ cn_autoinstall_ssh_keys | join('\n') }}
+EOF
+	chmod 600 /target/root/.ssh/authorized_keys
+
+	conf=/target/etc/ssh/sshd_config.d/10-autoinstall.conf
+	password=$(param password)
+	if [ -z "$password" ]; then
+		echo 'PasswordAuthentication no' >"$conf"
+		return
+	fi
+	printf 'root:%b\n' "$(echo "$password" | sed 's/../\\x&/g')" | chroot /target chpasswd
+	printf 'PasswordAuthentication yes\nPermitRootLogin yes\n' >"$conf"
+}

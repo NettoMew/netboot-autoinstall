@@ -149,7 +149,6 @@ checksums_filename: '{{ site_name }}-sha256-checksums.txt'
 cn_autoinstall_dns: 223.5.5.5
 cn_autoinstall_embedded: '{{ cn_autoinstall_enabled | bool and bootloader_filename == "netboot.xyz" }}'
 cn_autoinstall_enabled: false
-cn_autoinstall_hostname: debian
 cn_autoinstall_mirrors:
   - host: mirror.nju.edu.cn
     name: Nanjing University
@@ -177,6 +176,7 @@ cn_autoinstall_packages:
   - tcpdump
 cn_autoinstall_ssh_keys: []
 cn_autoinstall_timezone: Asia/Shanghai
+cn_autoinstall_ubuntu_images: http://mirror.nju.edu.cn/ubuntu-cloud-images
 codesign_cert_filename: codesign.crt
 codesign_key_filename: codesign.key
 custom_generate_menus: false
@@ -205,7 +205,7 @@ ipxe_ca_filename: ca-ipxe-org.crt
 ipxe_ca_url: http://ca.ipxe.org/ca.crt
 ipxe_debug_enabled: false
 ipxe_debug_options: httpcore,tls
-ipxe_embed: '{{ bootloader_filename }}{{ ",cn/preseed.cfg,cn/post.sh,cn/cuda-archive-keyring.gpg"
+ipxe_embed: '{{ bootloader_filename }}{{ ",cn/preseed.cfg,cn/post.sh,cn/cuda-archive-keyring.gpg,cn/ubuntu.apkovl.tar.gz"
   if cn_autoinstall_embedded | bool else "" }}'
 ipxe_repo: https://github.com/ipxe/ipxe
 ipxe_secureboot_archive_url: https://github.com/ipxe/ipxe/releases/download/{{ ipxe_secureboot_version

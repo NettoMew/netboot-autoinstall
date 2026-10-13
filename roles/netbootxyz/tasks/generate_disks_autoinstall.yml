@@ -31,3 +31,37 @@
   args:
     chdir: "{{ autoinstall_src_dir }}/cn"
     creates: "{{ autoinstall_src_dir }}/cn/cuda-archive-keyring.gpg"
+
+- name: Create Ubuntu installer overlay directories
+  ansible.builtin.file:
+    path: "{{ autoinstall_src_dir }}/cn/apkovl/etc/{{ item }}"
+    state: directory
+    mode: "0755"
+  with_items:
+    - local.d
+    - runlevels/default
+
+- name: Generate Ubuntu installer script
+  ansible.builtin.template:
+    src: cn/ubuntu.sh.j2
+    dest: "{{ autoinstall_src_dir }}/cn/apkovl/etc/local.d/autoinstall.start"
+    mode: "0755"
+
+- name: Run the Ubuntu installer from the Alpine local service
+  ansible.builtin.file:
+    src: /etc/init.d/local
+    dest: "{{ autoinstall_src_dir }}/cn/apkovl/etc/runlevels/default/local"
+    state: link
+    force: true
+
+- name: Keep the Alpine default boot services next to the overlay
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ autoinstall_src_dir }}/cn/apkovl/etc/.default_boot_services"
+    mode: "0644"
+
+- name: Pack the Ubuntu installer overlay
+  ansible.builtin.command:
+    cmd: tar -czf ../ubuntu.apkovl.tar.gz --owner=0 --group=0 etc
+    chdir: "{{ autoinstall_src_dir }}/cn/apkovl"
+  changed_when: true

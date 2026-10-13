@@ -1,0 +1,362 @@
+#!/bin/sh
+#
+# Ubuntu unattended install, embedded in the {{ site_name }} bootloader.
+#
+# Alpine Linux boots from the chosen mirror and runs this script from its
+# local service. Ubuntu goes onto the disk the way reinstall puts it there:
+# the server cloud image is attached over NBD and its files are copied onto
+# fresh partitions, then the system gets a kernel for the hardware, GRUB and
+# the settings made in the bootloader.
+#
+
+set -e
+
+if [ -z "$AUTOINSTALL_LOGGING" ]; then
+	AUTOINSTALL_LOGGING=1 "$0" 2>&1 | tee /var/log/autoinstall.log >/dev/console
+	exit
+fi
+
+{% include 'cn/common.sh.j2' %}
+
+in_target() {
+	chroot /target env DEBIAN_FRONTEND=noninteractive "$@"
+}
+
+# apt holds the newest kernels back from autoremove, which would keep the
+# cloud kernel around next to the one for the hardware.
+autoremove() {
+	conf=/target/etc/apt/apt.conf.d/01autoremove
+	cp "$conf" "$conf.orig"
+	sed -i 's/VersionedKernelPackages/x/; s/NeverAutoRemove/x/' "$conf"
+	in_target apt-get autoremove --purge -y
+	mv "$conf.orig" "$conf"
+}
+
+step() {
+	printf '\n==> %s\n' "$*"
+}
+
+# Prints partition $2 of disk $1.
+part() {
+	case $1 in
+	*[0-9]) echo "${1}p$2" ;;
+	*) echo "$1$2" ;;
+	esac
+}
+
+# Waits for a block device node. A one-off mdev scan creates the ones
+# devtmpfs leaves out, such as the partitions of an NBD device.
+wait_for() {
+	while ! [ -b "$1" ]; do
+		mdev -s
+		sleep 1
+	done
+}
+
+# Prints the first fixed, non-USB disk.
+first_disk() {
+	for block in /sys/block/*; do
+		name=${block##*/}
+		case $name in
+		loop* | ram* | nbd* | sr* | zram* | dm-* | md*) continue ;;
+		esac
+		[ "$(cat "$block/removable")" = 0 ] || continue
+		[ "$(cat "$block/size")" -gt 0 ] || continue
+		case $(readlink -f "$block") in
+		*/usb*) continue ;;
+		esac
+		echo "/dev/$name"
+		return
+	done
+}
+
+prepare_alpine() {
+	step "Preparing the installer"
+	community=$(sed -n 's|/main$|/community|p' /etc/apk/repositories)
+	echo "$community" >>/etc/apk/repositories
+	apk add --quiet blkid dosfstools e2fsprogs partx qemu-img rsync sfdisk wipefs
+	# The mdev daemon handles partition table changes after devtmpfs and
+	# would delete nodes the kernel just recreated.
+	rc-service mdev stop >/dev/null 2>&1
+	modprobe -a ext4 vfat
+	modprobe nbd max_part=16
+}
+
+# Lays out GPT with an EFI system or BIOS boot partition, the root
+# partition and, at the end, room for the downloaded image, which goes away
+# once the image is copied.
+partition() {
+	step "Partitioning $disk"
+	if [ "$efi" = 1 ]; then
+		first='size=512MiB, type=U'
+		first_mib=512
+	else
+		first='size=1MiB, type=21686148-6449-6E6F-744E-656564454649'
+		first_mib=1
+	fi
+	disk_mib=$(($(cat "/sys/block/${disk##*/}/size") / 2048))
+	root_mib=$((disk_mib - first_mib - 2048 - 2))
+	if [ "$root_mib" -lt 4096 ]; then
+		echo "$disk holds $disk_mib MiB, Ubuntu needs at least 8 GiB"
+		return 1
+	fi
+
+	wipefs -a "$disk"
+	sfdisk --quiet --wipe always --wipe-partitions always "$disk" <<EOF
+label: gpt
+$first
+size=${root_mib}MiB, type=L
+type=L
+EOF
+	for n in 1 2 3; do
+		wait_for "$(part "$disk" $n)"
+	done
+}
+
+download_image() {
+	url={{ cn_autoinstall_ubuntu_images }}/releases/$codename/release/ubuntu-$release-server-cloudimg-$arch.img
+	step "Downloading $url"
+	mkfs.ext4 -q -F "$(part "$disk" 3)"
+	mkdir -p /media/download
+	mount -t ext4 "$(part "$disk" 3)" /media/download
+	wget -O /media/download/cloud.img "$url"
+	qemu-nbd -r -c /dev/nbd0 /media/download/cloud.img
+	wait_for /dev/nbd0p1
+}
+
+# Recreates the image's root file system with the image's own tools, label
+# and UUID, so its fstab keeps working, and copies the root, /boot and EFI
+# system partitions over. The download partition then makes way for root.
+copy_image() {
+	step "Copying Ubuntu $release onto $disk"
+	image_root=$(blkid -o device -t LABEL=cloudimg-rootfs /dev/nbd0p*)
+	image_boot=$(blkid -o device -t LABEL=BOOT /dev/nbd0p*)
+	image_esp=$(blkid -o device -t LABEL=UEFI /dev/nbd0p*)
+
+	mkdir -p /media/image /target
+	mount -t ext4 -o ro "$image_root" /media/image
+	mount --bind /dev /media/image/dev
+	mount --bind /proc /media/image/proc
+	chroot /media/image mkfs.ext4 -q -F -L cloudimg-rootfs \
+		-U "$(blkid -o value -s UUID "$image_root")" "$(part "$disk" 2)"
+	umount /media/image/proc /media/image/dev
+
+	mount -t ext4 "$(part "$disk" 2)" /target
+	rsync -aHAX /media/image/ /target/
+	umount /media/image
+	mount -t ext4 -o ro "$image_boot" /media/image
+	rsync -aHAX --exclude /lost+found /media/image/ /target/boot/
+	umount /media/image
+
+	if [ "$efi" = 1 ]; then
+		mkfs.vfat -F 32 -n UEFI "$(part "$disk" 1)"
+		mount -t vfat "$(part "$disk" 1)" /target/boot/efi
+		mount -t vfat -o ro "$image_esp" /media/image
+		cp -r /media/image/. /target/boot/efi/
+		umount /media/image /target/boot/efi
+	fi
+
+	umount /target
+	qemu-nbd -d /dev/nbd0
+	umount /media/download
+	sfdisk --quiet --delete "$disk" 3
+	echo ', +' | sfdisk --quiet -N 2 "$disk"
+	wait_for "$(part "$disk" 2)"
+}
+
+mount_target() {
+	mount -t ext4 "$(part "$disk" 2)" /target
+	if [ "$efi" = 1 ]; then
+		mount -t vfat "$(part "$disk" 1)" /target/boot/efi
+	fi
+	for fs in dev dev/pts proc sys; do
+		mount --bind "/$fs" "/target/$fs"
+	done
+	mount -t tmpfs tmpfs /target/run
+	# /etc/resolv.conf points into /run
+	mkdir -p /target/run/systemd/resolve
+	cp /etc/resolv.conf /target/run/systemd/resolve/stub-resolv.conf
+	in_target resize2fs "$(part "$disk" 2)"
+}
+
+# Package scripts may have mounted more below /target, efivarfs for one.
+umount_target() {
+	awk '$2 ~ "^/target(/|$)" { print $2 }' /proc/mounts | sort -r | xargs umount
+}
+
+# Points apt at the chosen mirror and upgrades. The GRUB flavour the
+# firmware does not use goes first, so that upgrading it cannot try to
+# install it.
+upgrade() {
+	step "Upgrading from $mirror"
+	case $arch in
+	amd64) archive=ubuntu ;;
+	*) archive=ubuntu-ports ;;
+	esac
+	cat >/target/etc/apt/sources.list.d/ubuntu.sources <<EOF
+Types: deb
+URIs: http://$mirror/$archive/
+Suites: $codename $codename-updates $codename-backports $codename-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+EOF
+	in_target apt-get update
+	if [ "$efi" = 1 ]; then
+		in_target apt-get purge -y 'grub-pc*'
+	else
+		in_target apt-get purge -y --allow-remove-essential 'grub-efi*' 'shim*'
+	fi
+	in_target apt-get dist-upgrade -y
+}
+
+# Swaps the cloud kernel for the hardware enablement kernel, generic on
+# real hardware and virtual inside a virtual machine, as reinstall does.
+install_kernel() {
+	flavor=generic
+	if in_target systemd-detect-virt --vm --quiet; then
+		flavor=virtual
+	fi
+	step "Installing the $flavor kernel"
+	# Ubuntu 26.04 builds the initramfs with dracut, whose network modules
+	# would run DHCP on every interface before netplan gets a say.
+	dracut=0
+	if [ -d /target/etc/dracut.conf.d ]; then
+		dracut=1
+		echo 'omit_dracutmodules+=" dyn-netconf systemd-networkd net-lib "' \
+			>/target/etc/dracut.conf.d/10-autoinstall.conf
+	fi
+	# shellcheck disable=SC2046
+	in_target apt-mark auto $(in_target apt-mark showmanual \
+		linux-generic linux-virtual linux-kvm 'linux-image*' 'linux-headers*')
+	in_target apt-get install -y "linux-image-$flavor-hwe-$release"
+	autoremove
+	# The upgrade may already have brought the kernel in.
+	if [ "$dracut" = 1 ]; then
+		in_target dracut --force --regenerate-all
+	fi
+}
+
+# The image keeps /boot on a partition of its own, which the copy folded
+# into root.
+install_grub() {
+	step "Installing GRUB"
+	sed -i '/[[:space:]]\/boot[[:space:]]/d' /target/etc/fstab
+	if [ "$efi" = 1 ]; then
+		sed -i -e "s/[0-9a-f-]\{36\}/$(blkid -o value -s UUID "$(part "$disk" 2)")/" \
+			-e "s|'/grub'|'/boot/grub'|" /target/boot/efi/EFI/ubuntu/grub.cfg
+	else
+		sed -i '/[[:space:]]\/boot\/efi[[:space:]]/d' /target/etc/fstab
+		in_target grub-install "$disk"
+	fi
+	in_target update-grub
+}
+
+# Prints the prefix length of a dotted netmask.
+prefix_length() {
+	length=0
+	for octet in $(echo "$1" | tr . ' '); do
+		while [ "$octet" -gt 0 ]; do
+			length=$((length + octet % 2))
+			octet=$((octet / 2))
+		done
+	done
+	echo "$length"
+}
+
+# Prints the name Ubuntu gives the interface with MAC address $1, worked
+# out by its own udev from the onboard, slot or path names in that order.
+interface_name() {
+	for dev in /sys/class/net/*; do
+		[ "$(cat "$dev/address")" = "$1" ] || continue
+		names=$(in_target udevadm test-builtin net_id "$dev" 2>/dev/null)
+		for kind in ONBOARD SLOT PATH; do
+			name=$(echo "$names" | sed -n "s/^ID_NET_NAME_$kind=//p")
+			if [ -n "$name" ]; then
+				echo "$name"
+				return
+			fi
+		done
+	done
+}
+
+configure_system() {
+	step "Configuring the system"
+	mac=$(tr ' ' '\n' </proc/cmdline | sed -n 's/^BOOTIF=01-//p' | tr - :)
+	# Netplan settles a MAC match on the name the interface has when its
+	# generator runs, which may still be the kernel's. A fixed name keeps
+	# the wait for the network on the right interface.
+	name=$(interface_name "$mac")
+	{
+		printf 'network:\n  version: 2\n  ethernets:\n    uplink:\n'
+		printf '      match:\n        macaddress: "%s"\n' "$mac"
+		if [ -n "$name" ]; then
+			printf '      set-name: %s\n' "$name"
+		fi
+		if [ -n "$(param ip)" ]; then
+			printf '      addresses: [%s/%s]\n' "$(param ip)" "$(prefix_length "$(param netmask)")"
+			printf '      routes:\n        - to: default\n          via: %s\n' "$(param gateway)"
+			printf '      nameservers:\n        addresses: [%s]\n' "$(param dns)"
+		else
+			printf '      dhcp4: true\n'
+		fi
+	} >/target/etc/netplan/50-autoinstall.yaml
+	chmod 600 /target/etc/netplan/50-autoinstall.yaml
+
+	# Without cloud-init nothing would create the SSH host keys.
+	touch /target/etc/cloud/cloud-init.disabled
+	in_target ssh-keygen -A
+
+	hostname=$(param hostname)
+	echo "$hostname" >/target/etc/hostname
+	echo "127.0.1.1 $hostname" >>/target/etc/hosts
+	ln -sf /usr/share/zoneinfo/{{ cn_autoinstall_timezone }} /target/etc/localtime
+	echo {{ cn_autoinstall_timezone }} >/target/etc/timezone
+	if [ -d /target/etc/chrony/sources.d ]; then
+		echo 'server {{ cn_autoinstall_ntp }} iburst' >/target/etc/chrony/sources.d/autoinstall.sources
+	else
+		mkdir -p /target/etc/systemd/timesyncd.conf.d
+		printf '[Time]\nNTP={{ cn_autoinstall_ntp }}\n' >/target/etc/systemd/timesyncd.conf.d/autoinstall.conf
+	fi
+
+	in_target apt-get install -y {{ cn_autoinstall_packages | join(' ') }}
+	configure_login
+}
+
+trap 'echo "The installation failed, see /var/log/autoinstall.log. Log in as root to look around."' EXIT
+
+release=$(param release)
+codename=$(param codename)
+mirror=$(param mirror)
+case $(uname -m) in
+x86_64) arch=amd64 ;;
+aarch64) arch=arm64 ;;
+esac
+efi=0
+if [ -d /sys/firmware/efi ]; then
+	efi=1
+fi
+disk=$(param disk)
+case $disk in
+'' | auto) disk=$(first_disk) ;;
+esac
+if ! [ -b "$disk" ]; then
+	echo "No usable target disk: '$disk'"
+	exit 1
+fi
+
+prepare_alpine
+partition
+download_image
+copy_image
+mount_target
+upgrade
+install_kernel
+install_grub
+configure_system
+
+step "Rebooting into Ubuntu $release"
+cp /var/log/autoinstall.log /target/var/log/autoinstall.log
+umount_target
+sync
+trap - EXIT
+reboot

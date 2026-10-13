@@ -1,32 +1,57 @@
 #
-# Debian 13 unattended install
-# https://www.debian.org/releases/trixie/
+# Debian and Ubuntu unattended install
 #
 # Asks for a network interface, an address, an optional root password and a
-# mirror, then boots the Debian installer straight from that mirror. The preseed, its hook script
-# and the CUDA repository key travel inside this bootloader and reach the
-# installer as cpio archives, so nothing has to be hosted anywhere.
+# mirror, then boots straight from that mirror: the Debian installer for
+# Debian, Alpine Linux for Ubuntu, which it copies from the cloud image.
+# The preseed, the install scripts and the CUDA repository key travel
+# inside this bootloader and reach the installer as cpio archives, so
+# nothing has to be hosted anywhere.
 #
 
 :cn_autoinstall
 iseq ${buildarch} arm64 && goto cn_arm64 ||
 cpuid --ext 29 || goto cn_exit
 set cn_arch amd64
+set cn_alpine_arch x86_64
 goto cn_menu
 
 :cn_arm64
 set cn_arch arm64
+set cn_alpine_arch aarch64
 
 :cn_menu
-menu ${site_name} - Debian 13 unattended install
+isset ${cn_os_item} || set cn_os_item cn_debian
+menu ${site_name} - unattended install
 item --gap Install
-item cn_nic Debian 13 ${cn_arch} on XFS, root over SSH key, erases the target disk
+item cn_debian Debian 13
+item cn_ubuntu2404 Ubuntu 24.04
+item cn_ubuntu2604 Ubuntu 26.04
 item --gap Other
 item cn_exit ${site_name} menu
 item cn_shell iPXE shell
 item cn_reboot Reboot
-choose --default cn_nic cn_choice || goto cn_exit
-goto ${cn_choice}
+choose --default ${cn_os_item} cn_os_item || goto cn_exit
+goto ${cn_os_item}
+
+:cn_debian
+set cn_os debian
+set cn_name Debian 13
+goto cn_nic
+
+:cn_ubuntu2404
+set cn_os ubuntu
+set cn_release 24.04
+set cn_codename noble
+set cn_name Ubuntu 24.04
+goto cn_nic
+
+:cn_ubuntu2604
+set cn_os ubuntu
+set cn_release 26.04
+set cn_codename resolute
+set cn_name Ubuntu 26.04
+goto cn_nic
 
 :cn_nic
 # All interfaces come up together and get a few seconds to negotiate, then
@@ -94,9 +119,12 @@ prompt
 goto cn_address
 
 :cn_system
-isset ${cn_hostname} || set cn_hostname {{ cn_autoinstall_hostname }}
+# The hostname follows the system chosen until it is edited.
+iseq x${cn_hostname} x${cn_hostname_default} && clear cn_hostname ||
+set cn_hostname_default ${cn_os}
+isset ${cn_hostname} || set cn_hostname ${cn_hostname_default}
 isset ${cn_disk} || set cn_disk auto
-form Debian 13 system
+form ${cn_name}
 item cn_hostname Hostname
 item --secret cn_password Root password, leave empty for SSH keys only
 item cn_disk Target disk, auto or a device such as /dev/sda
@@ -104,7 +132,7 @@ present || goto cn_address
 
 :cn_mirror
 isset ${cn_mirror} || set cn_mirror {{ cn_autoinstall_mirrors[0].host }}
-menu Debian mirror
+menu Mirror
 {% for mirror in cn_autoinstall_mirrors %}
 item {{ mirror.host }} {{ mirror.host }} - {{ mirror.name }}
 {% endfor %}
@@ -112,10 +140,11 @@ item cn_mirror_other Other mirror...
 choose --default ${cn_mirror} cn_mirror || goto cn_system
 iseq ${cn_mirror} cn_mirror_other || goto cn_gpu
 clear cn_mirror
-echo -n Mirror host serving /debian and /debian-security: ${} && read cn_mirror ||
+echo -n Mirror host: ${} && read cn_mirror ||
 isset ${cn_mirror} || goto cn_mirror
 
 :cn_gpu
+iseq ${cn_os} debian || goto cn_confirm
 set cn_gpus:int32 0
 clear cn_pci
 :cn_gpu_scan
@@ -127,16 +156,16 @@ goto cn_gpu_scan
 :cn_confirm
 isset ${cn_nvidia} || set cn_nvidia auto
 isset ${cn_password} && set cn_login SSH keys or password || set cn_login SSH keys only
-menu Install Debian 13, the target disk will be erased
+menu Install ${cn_name}, the target disk will be erased
 item --gap Disk: ${cn_disk}
 item --gap Interface: ${cn_nic} ${${cn_nic}/mac}
 item --gap Address: ${cn_address_text}
 item --gap Mirror: ${cn_mirror}
 item --gap Root login: ${cn_login}
-item --gap NVIDIA GPUs: ${cn_gpus}
+iseq ${cn_os} debian && item --gap NVIDIA GPUs: ${cn_gpus} ||
 item --gap
 item cn_boot Install now
-item cn_nvidia_toggle NVIDIA driver: ${cn_nvidia}
+iseq ${cn_os} debian && item cn_nvidia_toggle NVIDIA driver: ${cn_nvidia} ||
 item cn_menu Start over
 choose --default cn_boot cn_choice || goto cn_mirror
 goto ${cn_choice}
@@ -146,23 +175,39 @@ iseq ${cn_nvidia} auto && set cn_nvidia off || set cn_nvidia auto
 goto cn_confirm
 
 :cn_boot
-isset ${cn_ip} && set cn_netcfg netcfg/disable_autoconfig=true netcfg/get_ipaddress=${cn_ip} netcfg/get_netmask=${cn_netmask} netcfg/get_gateway=${cn_gateway} netcfg/get_nameservers=${cn_dns} netcfg/confirm_static=true || clear cn_netcfg
 isset ${cn_password} && set cn_secret cn_password=${cn_password:hexraw} || clear cn_secret
+goto cn_boot_${cn_os}
+
+:cn_boot_debian
+isset ${cn_ip} && set cn_netcfg netcfg/disable_autoconfig=true netcfg/get_ipaddress=${cn_ip} netcfg/get_netmask=${cn_netmask} netcfg/get_gateway=${cn_gateway} netcfg/get_nameservers=${cn_dns} netcfg/confirm_static=true || clear cn_netcfg
 set cn_base http://${cn_mirror}/debian/dists/trixie/main/installer-${cn_arch}/current/images/netboot/debian-installer/${cn_arch}
 echo Loading the Debian installer from ${cn_mirror}...
 kernel --name cn_kernel ${cn_base}/linux auto=true priority=critical BOOTIF=01-${${cn_nic}/mac:hexhyp} netcfg/choose_interface=${${cn_nic}/mac} ${cn_netcfg} netcfg/hostname=${cn_hostname} mirror/http/hostname=${cn_mirror} apt-setup/security_host=${cn_mirror} cn_disk=${cn_disk} cn_nvidia=${cn_nvidia} ${cn_secret} {{ kernel_params }} || goto cn_error
 initrd --name cn_initrd ${cn_base}/initrd.gz || goto cn_error
-# The embedded files are registered already, naming them places them in
-# the initramfs next to the installer.
+goto cn_start
+
+:cn_boot_ubuntu
+isset ${cn_ip} && set cn_alpine_ip ${cn_ip}::${cn_gateway}:${cn_netmask}::::${cn_dns} || set cn_alpine_ip dhcp
+isset ${cn_ip} && set cn_static cn_ip=${cn_ip} cn_netmask=${cn_netmask} cn_gateway=${cn_gateway} cn_dns=${cn_dns} || clear cn_static
+set cn_base http://${cn_mirror}/alpine/latest-stable/releases/${cn_alpine_arch}/netboot
+echo Loading Alpine Linux from ${cn_mirror} to install ${cn_name}...
+kernel --name cn_kernel ${cn_base}/vmlinuz-lts ip=${cn_alpine_ip} BOOTIF=01-${${cn_nic}/mac:hexhyp} alpine_repo=http://${cn_mirror}/alpine/latest-stable/main modloop=${cn_base}/modloop-lts apkovl=/ubuntu.apkovl.tar.gz ${cn_static} cn_release=${cn_release} cn_codename=${cn_codename} cn_mirror=${cn_mirror} cn_hostname=${cn_hostname} cn_disk=${cn_disk} ${cn_secret} {{ kernel_params }} || goto cn_error
+initrd --name cn_initrd ${cn_base}/initramfs-lts || goto cn_error
+
+:cn_start
+# The embedded files are registered already. Naming them places them in
+# the initramfs as files, every one of them, since an unnamed image would
+# land there as raw bytes.
 imgargs preseed.cfg preseed.cfg || goto cn_error
 imgargs post.sh post.sh mode=755 || goto cn_error
 imgargs cuda-archive-keyring.gpg cuda-archive-keyring.gpg || goto cn_error
+imgargs ubuntu.apkovl.tar.gz ubuntu.apkovl.tar.gz || goto cn_error
 boot || goto cn_error
 
 :cn_error
 imgfree cn_kernel ||
 imgfree cn_initrd ||
-echo The Debian installer could not be started, press any key to return
+echo The installer could not be started, press any key to return
 prompt
 goto cn_confirm
 
@@ -176,6 +221,6 @@ reboot
 goto cn_menu
 
 :cn_exit
-imgfree preseed.cfg post.sh cuda-archive-keyring.gpg ||
+imgfree preseed.cfg post.sh cuda-archive-keyring.gpg ubuntu.apkovl.tar.gz ||
 set cn_released 1
 goto start
