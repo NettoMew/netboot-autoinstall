@@ -199,6 +199,7 @@ generate_local_vars: true
 generate_menus: true
 generate_signatures: false
 generate_version_file: true
+genfsimg_script: '{{ "" if cn_autoinstall_embedded | bool else "-s " + bootloader_filename }}'
 ipxe_branch: master
 ipxe_ca_filename: ca-ipxe-org.crt
 ipxe_ca_url: http://ca.ipxe.org/ca.crt
