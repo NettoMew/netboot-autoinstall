@@ -2,8 +2,8 @@
 # Debian 13 unattended install
 # https://www.debian.org/releases/trixie/
 #
-# Asks for a network interface, an address and a mirror, then boots the
-# Debian installer straight from that mirror. The preseed, its hook script
+# Asks for a network interface, an address, an optional root password and a
+# mirror, then boots the Debian installer straight from that mirror. The preseed, its hook script
 # and the CUDA repository key travel inside this bootloader and reach the
 # installer as cpio archives, so nothing has to be hosted anywhere.
 #
@@ -42,15 +42,11 @@ choose --default ${cn_nic} cn_nic || goto cn_menu
 
 :cn_address
 isset ${cn_dns} || set cn_dns:ipv4 {{ cn_autoinstall_dns }}
-isset ${cn_hostname} || set cn_hostname {{ cn_autoinstall_hostname }}
-isset ${cn_disk} || set cn_disk auto
-form Debian 13 on ${cn_nic} ${${cn_nic}/mac}
+form Network on ${cn_nic} ${${cn_nic}/mac}
 item cn_ip:ipv4 IP address, leave empty for DHCP
 item cn_netmask:ipv4 Netmask
 item cn_gateway:ipv4 Gateway
 item cn_dns:ipv4 DNS server
-item cn_hostname Hostname
-item cn_disk Target disk, auto or a device such as /dev/sda
 present || goto cn_nic
 ifclose ||
 isset ${cn_ip} || goto cn_dhcp
@@ -64,7 +60,7 @@ set ${cn_nic}/gateway ${cn_gateway}
 set dns ${cn_dns}
 ifopen ${cn_nic} || goto cn_offline
 set cn_address_text ${cn_ip} netmask ${cn_netmask} gateway ${cn_gateway}
-goto cn_mirror
+goto cn_system
 
 :cn_dhcp
 clear ${cn_nic}/ip
@@ -72,12 +68,21 @@ clear ${cn_nic}/netmask
 clear ${cn_nic}/gateway
 ifconf --configurator dhcp ${cn_nic} || goto cn_offline
 set cn_address_text DHCP, currently ${${cn_nic}/ip}
-goto cn_mirror
+goto cn_system
 
 :cn_offline
 echo ${cn_nic} could not be brought up, press any key to edit the address
 prompt
 goto cn_address
+
+:cn_system
+isset ${cn_hostname} || set cn_hostname {{ cn_autoinstall_hostname }}
+isset ${cn_disk} || set cn_disk auto
+form Debian 13 system
+item cn_hostname Hostname
+item --secret cn_password Root password, leave empty for SSH keys only
+item cn_disk Target disk, auto or a device such as /dev/sda
+present || goto cn_address
 
 :cn_mirror
 isset ${cn_mirror} || set cn_mirror {{ cn_autoinstall_mirrors[0].host }}
@@ -86,7 +91,7 @@ menu Debian mirror
 item {{ mirror.host }} {{ mirror.host }} - {{ mirror.name }}
 {% endfor %}
 item cn_mirror_other Other mirror...
-choose --default ${cn_mirror} cn_mirror || goto cn_address
+choose --default ${cn_mirror} cn_mirror || goto cn_system
 iseq ${cn_mirror} cn_mirror_other || goto cn_gpu
 clear cn_mirror
 echo -n Mirror host serving /debian and /debian-security: ${} && read cn_mirror ||
@@ -103,11 +108,13 @@ goto cn_gpu_scan
 
 :cn_confirm
 isset ${cn_nvidia} || set cn_nvidia auto
+isset ${cn_password} && set cn_login SSH keys or password || set cn_login SSH keys only
 menu Install Debian 13, the target disk will be erased
 item --gap Disk: ${cn_disk}
 item --gap Interface: ${cn_nic} ${${cn_nic}/mac}
 item --gap Address: ${cn_address_text}
 item --gap Mirror: ${cn_mirror}
+item --gap Root login: ${cn_login}
 item --gap NVIDIA GPUs: ${cn_gpus}
 item --gap
 item cn_boot Install now
@@ -122,9 +129,10 @@ goto cn_confirm
 
 :cn_boot
 isset ${cn_ip} && set cn_netcfg netcfg/disable_autoconfig=true netcfg/get_ipaddress=${cn_ip} netcfg/get_netmask=${cn_netmask} netcfg/get_gateway=${cn_gateway} netcfg/get_nameservers=${cn_dns} netcfg/confirm_static=true || clear cn_netcfg
+isset ${cn_password} && set cn_secret cn_password=${cn_password:hexraw} || clear cn_secret
 set cn_base http://${cn_mirror}/debian/dists/trixie/main/installer-${cn_arch}/current/images/netboot/debian-installer/${cn_arch}
 echo Loading the Debian installer from ${cn_mirror}...
-kernel --name cn_kernel ${cn_base}/linux auto=true priority=critical BOOTIF=01-${${cn_nic}/mac:hexhyp} ${cn_netcfg} netcfg/hostname=${cn_hostname} mirror/http/hostname=${cn_mirror} apt-setup/security_host=${cn_mirror} cn_disk=${cn_disk} cn_nvidia=${cn_nvidia} {{ kernel_params }} || goto cn_error
+kernel --name cn_kernel ${cn_base}/linux auto=true priority=critical BOOTIF=01-${${cn_nic}/mac:hexhyp} ${cn_netcfg} netcfg/hostname=${cn_hostname} mirror/http/hostname=${cn_mirror} apt-setup/security_host=${cn_mirror} cn_disk=${cn_disk} cn_nvidia=${cn_nvidia} ${cn_secret} {{ kernel_params }} || goto cn_error
 initrd --name cn_initrd ${cn_base}/initrd.gz || goto cn_error
 # The embedded files are registered already, naming them places them in
 # the initramfs next to the installer.

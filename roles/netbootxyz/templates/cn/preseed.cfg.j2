@@ -2,10 +2,12 @@
 #
 # Debian 13 unattended install, embedded in the {{ site_name }} bootloader.
 #
-# The bootloader passes the network, mirror, disk and NVIDIA choices on the
-# kernel command line. Everything that does not depend on them lives here,
+# The bootloader passes the network, mirror, disk, password and NVIDIA
+# choices on the kernel command line. Everything that does not depend on them lives here,
 # and /post.sh carries the few steps that need a shell.
 #
+
+d-i preseed/early_command string sh /post.sh early
 
 # Localization
 d-i debian-installer/locale string en_US.UTF-8
@@ -17,7 +19,7 @@ d-i mirror/http/directory string /debian
 d-i mirror/http/proxy string
 d-i mirror/suite string trixie
 
-# Accounts: root logs in with SSH keys only
+# Accounts: root starts locked, post.sh adds the SSH keys and any password
 d-i passwd/root-login boolean true
 d-i passwd/make-user boolean false
 d-i passwd/root-password-crypted password *

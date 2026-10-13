@@ -2,8 +2,9 @@
 #
 # Debian 13 unattended install hooks, embedded in the {{ site_name }} bootloader.
 #
-# The installer runs "post.sh partman" right before partitioning and
-# "post.sh late" right before it reboots into the new system.
+# The installer runs "post.sh early" once the preseed is loaded,
+# "post.sh partman" right before partitioning and "post.sh late" right
+# before it reboots into the new system.
 #
 
 set -e
@@ -50,16 +51,39 @@ select_disk() {
 	debconf-set partman-auto/expert_recipe "$(debconf-get "partman-auto/expert_recipe_$firmware")"
 }
 
-# Lets the SSH keys in and keeps passwords out. systemd-tmpfiles has
-# usually created /root/.ssh already.
-authorize_keys() {
+# The root password, if one was entered, arrives hex encoded on the kernel
+# command line. The installer copies that command line into the logs it
+# saves to the new system, so a hook running right after 94save-logs
+# blanks it out there again.
+hide_password() {
+	[ -n "$(param password)" ] || return 0
+	printf '#!/bin/sh\nexec sh /post.sh scrub\n' >/usr/lib/finish-install.d/94scrub-password
+	chmod 755 /usr/lib/finish-install.d/94scrub-password
+}
+
+scrub_password() {
+	sed -i 's/cn_password=[0-9a-f]*/cn_password=/g' \
+		/target/var/log/installer/syslog /target/var/log/installer/hardware-summary
+}
+
+# Lets the SSH keys in. Without a root password SSH takes keys only, with
+# one root may log in with either. systemd-tmpfiles has usually created
+# /root/.ssh already.
+configure_login() {
 	mkdir -p /target/root/.ssh
 	chmod 700 /target/root/.ssh
 	cat >/target/root/.ssh/authorized_keys <<'EOF'
 {{ cn_autoinstall_ssh_keys | join('\n') }}
 EOF
 	chmod 600 /target/root/.ssh/authorized_keys
-	echo 'PasswordAuthentication no' >/target/etc/ssh/sshd_config.d/autoinstall.conf
+
+	password=$(param password)
+	if [ -z "$password" ]; then
+		echo 'PasswordAuthentication no' >/target/etc/ssh/sshd_config.d/autoinstall.conf
+		return
+	fi
+	printf 'root:%b\n' "$(echo "$password" | sed 's/../\\x&/g')" | chroot /target chpasswd
+	echo 'PermitRootLogin yes' >/target/etc/ssh/sshd_config.d/autoinstall.conf
 }
 
 # Installs the NVIDIA data center stack from NVIDIA's own repository when
@@ -122,11 +146,17 @@ EOF
 }
 
 case $1 in
+early)
+	hide_password
+	;;
 partman)
 	select_disk
 	;;
 late)
-	authorize_keys
+	configure_login
 	install_nvidia
+	;;
+scrub)
+	scrub_password
 	;;
 esac
