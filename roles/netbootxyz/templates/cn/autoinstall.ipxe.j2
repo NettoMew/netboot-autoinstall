@@ -29,15 +29,33 @@ choose --default cn_nic cn_choice || goto cn_exit
 goto ${cn_choice}
 
 :cn_nic
-isset ${cn_nic} || set cn_nic net0
+# All interfaces come up together and get a few seconds to negotiate, then
+# each one is checked for a link, so the cable in use shows in the list.
+set cn_index:int32 0
+:cn_nic_open
+isset ${net${cn_index}/mac} || goto cn_nic_wait
+ifopen net${cn_index} ||
+inc cn_index
+goto cn_nic_open
+:cn_nic_wait
+sleep 3
+clear cn_nic_linked
 set cn_index:int32 0
 menu Network interface
 :cn_nic_item
 isset ${net${cn_index}/mac} || goto cn_nic_choose
+iflinkwait --timeout 100 net${cn_index} && goto cn_nic_up ||
 item net${cn_index} net${cn_index} ${net${cn_index}/mac} ${net${cn_index}/chip}
+goto cn_nic_next
+:cn_nic_up
+item net${cn_index} net${cn_index} ${net${cn_index}/mac} ${net${cn_index}/chip} link up
+isset ${cn_nic_linked} || set cn_nic_linked net${cn_index}
+:cn_nic_next
 inc cn_index
 goto cn_nic_item
 :cn_nic_choose
+isset ${cn_nic} || set cn_nic ${cn_nic_linked}
+isset ${cn_nic} || set cn_nic net0
 choose --default ${cn_nic} cn_nic || goto cn_menu
 
 :cn_address
@@ -132,7 +150,7 @@ isset ${cn_ip} && set cn_netcfg netcfg/disable_autoconfig=true netcfg/get_ipaddr
 isset ${cn_password} && set cn_secret cn_password=${cn_password:hexraw} || clear cn_secret
 set cn_base http://${cn_mirror}/debian/dists/trixie/main/installer-${cn_arch}/current/images/netboot/debian-installer/${cn_arch}
 echo Loading the Debian installer from ${cn_mirror}...
-kernel --name cn_kernel ${cn_base}/linux auto=true priority=critical BOOTIF=01-${${cn_nic}/mac:hexhyp} ${cn_netcfg} netcfg/hostname=${cn_hostname} mirror/http/hostname=${cn_mirror} apt-setup/security_host=${cn_mirror} cn_disk=${cn_disk} cn_nvidia=${cn_nvidia} ${cn_secret} {{ kernel_params }} || goto cn_error
+kernel --name cn_kernel ${cn_base}/linux auto=true priority=critical BOOTIF=01-${${cn_nic}/mac:hexhyp} netcfg/choose_interface=${${cn_nic}/mac} ${cn_netcfg} netcfg/hostname=${cn_hostname} mirror/http/hostname=${cn_mirror} apt-setup/security_host=${cn_mirror} cn_disk=${cn_disk} cn_nvidia=${cn_nvidia} ${cn_secret} {{ kernel_params }} || goto cn_error
 initrd --name cn_initrd ${cn_base}/initrd.gz || goto cn_error
 # The embedded files are registered already, naming them places them in
 # the initramfs next to the installer.
