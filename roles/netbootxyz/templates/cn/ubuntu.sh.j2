@@ -129,13 +129,21 @@ EOF
 	done
 }
 
+# A transfer that stalls halfway is given up after a minute and picked up
+# where it stopped, up to five times, rather than failing the install.
 download_image() {
 	url={{ cn_autoinstall_ubuntu_images }}/releases/$codename/release/ubuntu-$release-server-cloudimg-$arch.img
 	step "Downloading $url"
 	mkfs.ext4 -q -F "$(part "$disk" 3)"
 	mkdir -p /media/download
 	mount -t ext4 "$(part "$disk" 3)" /media/download
-	wget -O /media/download/cloud.img "$url"
+	tries=0
+	until wget -c -T 60 -O /media/download/cloud.img "$url"; do
+		tries=$((tries + 1))
+		[ "$tries" -lt 5 ] || return 1
+		echo "Download interrupted, resuming"
+		sleep 5
+	done
 	qemu-nbd -r -c /dev/nbd0 /media/download/cloud.img
 	wait_for /dev/nbd0p1
 }
