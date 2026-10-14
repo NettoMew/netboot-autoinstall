@@ -1,0 +1,38 @@
+#!/bin/sh
+#
+# Runs ahead of the Alpine Linux init on the way to the Ubuntu installer.
+#
+# That init sets the address and fetches its packages right away, while a
+# physical port may still be negotiating or held back by the switch for
+# spanning tree. The fetch then fails and leaves Alpine without a root file
+# system. Its network setup is wrapped here so that it goes on to wait for
+# the gateway to answer ARP, for up to two minutes. Should a later Alpine
+# rename that setup, the wrapper gives way to it.
+#
+# The kernel starts this without PATH and before busybox has installed its
+# applets, hence the full calls.
+
+# shellcheck disable=SC2016 # the program is awk, not shell
+/bin/busybox awk '
+	NR == FNR { wrapper = wrapper $0 "\n"; next }
+	FNR == 1 { print; printf "%s", wrapper; next }
+	{ sub(/^configure_ip\(\) \{$/, "alpine_configure_ip() {"); print }
+' - /init >/init.autoinstall <<'EOF'
+configure_ip() {
+	alpine_configure_ip || return
+	# shellcheck disable=SC2046 # splits into via, gateway, dev, interface
+	set -- $(ip route show default)
+	[ "$1" = default ] || return 0
+	ebegin "Waiting for the gateway $3 on $5"
+	local tries=0
+	until arping -q -c 1 -w 1 -I "$5" "$3"; do
+		tries=$((tries + 1))
+		[ "$tries" -lt 60 ] || break
+		sleep 1
+	done
+	[ "$tries" -lt 60 ]
+	eend $?
+}
+EOF
+
+exec /bin/sh /init.autoinstall "$@"

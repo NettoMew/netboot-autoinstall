@@ -47,6 +47,12 @@
     dest: "{{ autoinstall_src_dir }}/cn/apkovl/etc/local.d/autoinstall.start"
     mode: "0755"
 
+- name: Generate Alpine init wrapper that waits for the network
+  ansible.builtin.template:
+    src: cn/alpine-init.sh.j2
+    dest: "{{ autoinstall_src_dir }}/cn/alpine-init.sh"
+    mode: "0755"
+
 - name: Run the Ubuntu installer from the Alpine local service
   ansible.builtin.file:
     src: /etc/init.d/local

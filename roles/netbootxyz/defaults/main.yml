@@ -205,7 +205,7 @@ ipxe_ca_filename: ca-ipxe-org.crt
 ipxe_ca_url: http://ca.ipxe.org/ca.crt
 ipxe_debug_enabled: false
 ipxe_debug_options: httpcore,tls
-ipxe_embed: '{{ bootloader_filename }}{{ ",cn/preseed.cfg,cn/post.sh,cn/cuda-archive-keyring.gpg,cn/ubuntu.apkovl.tar.gz"
+ipxe_embed: '{{ bootloader_filename }}{{ ",cn/preseed.cfg,cn/post.sh,cn/cuda-archive-keyring.gpg,cn/ubuntu.apkovl.tar.gz,cn/alpine-init.sh"
   if cn_autoinstall_embedded | bool else "" }}'
 ipxe_repo: https://github.com/ipxe/ipxe
 ipxe_secureboot_archive_url: https://github.com/ipxe/ipxe/releases/download/{{ ipxe_secureboot_version

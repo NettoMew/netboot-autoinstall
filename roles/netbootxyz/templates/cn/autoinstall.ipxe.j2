@@ -191,7 +191,7 @@ isset ${cn_ip} && set cn_alpine_ip ${cn_ip}::${cn_gateway}:${cn_netmask}::::${cn
 isset ${cn_ip} && set cn_static cn_ip=${cn_ip} cn_netmask=${cn_netmask} cn_gateway=${cn_gateway} cn_dns=${cn_dns} || clear cn_static
 set cn_base http://${cn_mirror}/alpine/latest-stable/releases/${cn_alpine_arch}/netboot
 echo Loading Alpine Linux from ${cn_mirror} to install ${cn_name}...
-kernel --name cn_kernel ${cn_base}/vmlinuz-lts ip=${cn_alpine_ip} BOOTIF=01-${${cn_nic}/mac:hexhyp} alpine_repo=http://${cn_mirror}/alpine/latest-stable/main modloop=${cn_base}/modloop-lts apkovl=/ubuntu.apkovl.tar.gz ${cn_static} cn_release=${cn_release} cn_codename=${cn_codename} cn_mirror=${cn_mirror} cn_hostname=${cn_hostname} cn_disk=${cn_disk} ${cn_secret} {{ kernel_params }} || goto cn_error
+kernel --name cn_kernel ${cn_base}/vmlinuz-lts rdinit=/alpine-init.sh ip=${cn_alpine_ip} BOOTIF=01-${${cn_nic}/mac:hexhyp} alpine_repo=http://${cn_mirror}/alpine/latest-stable/main modloop=${cn_base}/modloop-lts apkovl=/ubuntu.apkovl.tar.gz ${cn_static} cn_release=${cn_release} cn_codename=${cn_codename} cn_mirror=${cn_mirror} cn_hostname=${cn_hostname} cn_disk=${cn_disk} ${cn_secret} {{ kernel_params }} || goto cn_error
 initrd --name cn_initrd ${cn_base}/initramfs-lts || goto cn_error
 
 :cn_start
@@ -202,6 +202,7 @@ imgargs preseed.cfg preseed.cfg || goto cn_error
 imgargs post.sh post.sh mode=755 || goto cn_error
 imgargs cuda-archive-keyring.gpg cuda-archive-keyring.gpg || goto cn_error
 imgargs ubuntu.apkovl.tar.gz ubuntu.apkovl.tar.gz || goto cn_error
+imgargs alpine-init.sh alpine-init.sh mode=755 || goto cn_error
 boot || goto cn_error
 
 :cn_error
@@ -221,6 +222,6 @@ reboot
 goto cn_menu
 
 :cn_exit
-imgfree preseed.cfg post.sh cuda-archive-keyring.gpg ubuntu.apkovl.tar.gz ||
+imgfree preseed.cfg post.sh cuda-archive-keyring.gpg ubuntu.apkovl.tar.gz alpine-init.sh ||
 set cn_released 1
 goto start
