@@ -70,8 +70,24 @@ first_disk() {
 	done
 }
 
+# The hardware clock may be years off, and apt turns down archives signed
+# in what looks like the future. The mirror's Date header puts it right
+# without depending on NTP getting through, as reinstall does, and the
+# hardware clock keeps the time for the first boot of Ubuntu.
+set_clock() {
+	url=$(head -n 1 /etc/apk/repositories)/$(uname -m)/APKINDEX.tar.gz
+	now=$(wget -S --spider "$url" 2>&1 | sed -n 's/^ *Date: //p' | head -n 1)
+	if [ -n "$now" ]; then
+		date -u -D '%a, %d %b %Y %H:%M:%S GMT' -s "$now"
+	fi
+	if [ -e /dev/rtc0 ]; then
+		hwclock -w -u -f /dev/rtc0
+	fi
+}
+
 prepare_alpine() {
 	step "Preparing the installer"
+	set_clock
 	community=$(sed -n 's|/main$|/community|p' /etc/apk/repositories)
 	echo "$community" >>/etc/apk/repositories
 	apk add --quiet blkid dosfstools e2fsprogs partx qemu-img rsync sfdisk wipefs
